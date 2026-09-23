@@ -26,6 +26,11 @@ DOC_EXTENSIONS = {
     'txt', 'rtf', 'odt', 'ods', 'odp', 'csv', 'zip', 'rar',
 }
 
+# Обычный поиск чаще всего отдаёт ссылки на веб-страницы, а не на сами
+# файлы. Если так, пробуем те же слова с оператором filetype: — это
+# заставляет поисковик показывать прямые ссылки на документы.
+FALLBACK_FILETYPES = ['pdf', 'doc', 'docx', 'xlsx', 'pptx']
+
 
 def unwrap_ddg_link(href):
     """DuckDuckGo оборачивает ссылки в свой редирект — достаём настоящий URL."""
@@ -47,8 +52,9 @@ def is_document_link(url):
     return '.' in filename_from_url(url) and ext in DOC_EXTENSIONS
 
 
-def search_document_links(page, query):
-    page.goto(SEARCH_URL.format(query=query.replace(' ', '+')), timeout=30000)
+def search_document_links(page, query, filetype=None):
+    search_terms = f'{query} filetype:{filetype}' if filetype else query
+    page.goto(SEARCH_URL.format(query=search_terms.replace(' ', '+')), timeout=30000)
     hrefs = page.eval_on_selector_all('a', 'els => els.map(e => e.href)')
     links = []
     for href in hrefs:
@@ -90,8 +96,12 @@ def find_and_download(query, target_dir='downloads', exact=False, headless=False
         browser = p.chromium.launch(headless=headless, slow_mo=250 if not headless else 0)
         page = browser.new_page()
         try:
-            links = search_document_links(page, query)
-            match = pick_best_match(links, query, exact=exact)
+            match = None
+            for filetype in [None, *FALLBACK_FILETYPES]:
+                links = search_document_links(page, query, filetype=filetype)
+                match = pick_best_match(links, query, exact=exact)
+                if match:
+                    break
             if match is None:
                 print(f'Документ по запросу «{query}» не найден.')
                 return None
