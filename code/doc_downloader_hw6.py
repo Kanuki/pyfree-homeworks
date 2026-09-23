@@ -128,9 +128,12 @@ def find_and_download(query, target_dir='downloads', exact=False, headless=False
                                f'(проверено ссылок на документы: {unique_count}, '
                                f'но ни одно имя файла не совпало с запросом).')
                 else:
+                    total_links = page.locator('a').count()
+                    title = page.title()
                     message = (f'Документ по запросу «{query}» не найден '
-                               f'(поиск не дал ни одной ссылки на документ — '
-                               f'проверьте формулировку запроса или доступность поисковика).')
+                               f'(поиск не дал ни одной ссылки на документ; '
+                               f'на последней странице поисковика всего ссылок: '
+                               f'{total_links}, заголовок страницы: «{title}»).')
                 raise DocumentNotFoundError(message)
             path = download_file(page, match, target_dir)
             if not headless:
