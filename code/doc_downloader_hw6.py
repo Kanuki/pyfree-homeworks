@@ -1,18 +1,20 @@
 """
-Помощник-скачиватель: ищет документ в интернете по запросу и скачивает
-файл, чьё имя совпадает с запросом (точно или частично).
+Помощник-скачиватель: открывает настоящее окно браузера (Chromium), ищет
+в нём документ по запросу и скачивает файл, чьё имя совпадает с запросом
+(точно или частично).
 
-Запуск браузера — через Playwright/Chromium. Перед первым запуском один раз
-выполнить:
+Перед первым запуском один раз выполнить:
     pip install playwright
     playwright install chromium
 
 Использование:
     python doc_downloader_hw6.py "отчет по продажам"
     python doc_downloader_hw6.py "отчет по продажам" --exact --dir ./загрузки
+    python doc_downloader_hw6.py "отчет по продажам" --headless  # без окна, в фоне
 """
 import argparse
 import os
+import time
 from urllib.parse import unquote, urljoin, urlparse, parse_qs
 
 from playwright.sync_api import sync_playwright
@@ -83,9 +85,9 @@ def download_file(page, url, target_dir):
     return target_path
 
 
-def find_and_download(query, target_dir='downloads', exact=False):
+def find_and_download(query, target_dir='downloads', exact=False, headless=False):
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=headless, slow_mo=250 if not headless else 0)
         page = browser.new_page()
         try:
             links = search_document_links(page, query)
@@ -95,6 +97,8 @@ def find_and_download(query, target_dir='downloads', exact=False):
                 return None
             path = download_file(page, match, target_dir)
             print(f'Скачано: {path}')
+            if not headless:
+                time.sleep(2)
             return path
         finally:
             browser.close()
@@ -107,9 +111,12 @@ def parse_args():
                          help='искать только точное совпадение имени файла')
     parser.add_argument('--dir', default='downloads',
                          help='папка для сохранения (по умолчанию ./downloads)')
+    parser.add_argument('--headless', action='store_true',
+                         help='не показывать окно браузера, работать в фоне')
     return parser.parse_args()
 
 
 if __name__ == '__main__':
     args = parse_args()
-    find_and_download(args.query, target_dir=args.dir, exact=args.exact)
+    find_and_download(args.query, target_dir=args.dir, exact=args.exact,
+                       headless=args.headless)
