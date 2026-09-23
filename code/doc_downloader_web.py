@@ -13,7 +13,7 @@
 """
 from flask import Flask, render_template_string, request
 
-from doc_downloader_hw6 import find_and_download
+from doc_downloader_hw6 import DocumentNotFoundError, find_and_download
 
 app = Flask(__name__)
 
@@ -65,13 +65,12 @@ def index():
         if query:
             try:
                 path = find_and_download(query, exact=exact, headless=True)
+            except DocumentNotFoundError as e:
+                result = {'ok': False, 'message': str(e)}
             except Exception as e:
                 result = {'ok': False, 'message': f'Ошибка: {e}'}
             else:
-                if path:
-                    result = {'ok': True, 'message': f'Скачано: {path}'}
-                else:
-                    result = {'ok': False, 'message': f'Документ по запросу «{query}» не найден.'}
+                result = {'ok': True, 'message': f'Скачано: {path}'}
     return render_template_string(PAGE, query=query, exact=exact, result=result)
 
 

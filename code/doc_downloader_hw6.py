@@ -14,6 +14,7 @@
 """
 import argparse
 import os
+import re
 import time
 from urllib.parse import unquote, urljoin, urlparse, parse_qs
 
@@ -64,6 +65,12 @@ def search_document_links(page, query, filetype=None):
     return links
 
 
+def extract_key_tokens(query):
+    """Номера вида 8736-2014 (ГОСТ, СП, СНиП и т.п.) — самая надёжная примета
+    файла: они почти всегда есть в имени, даже если слов вокруг них нет."""
+    return [t for t in re.findall(r'\d[\d\-]*\d|\d+', query) if len(t) >= 4]
+
+
 def pick_best_match(links, query, exact=False):
     query = query.strip().lower()
     for url in links:
@@ -76,7 +83,17 @@ def pick_best_match(links, query, exact=False):
     for url in links:
         if query in filename_from_url(url).lower():
             return url
+    # запрос целиком не совпал — пробуем по номеру документа (для ГОСТ/СП/
+    # СНиП и т.п. имя файла редко содержит слова запроса, но номер обычно есть)
+    for token in extract_key_tokens(query):
+        for url in links:
+            if token in filename_from_url(url).lower():
+                return url
     return None
+
+
+class DocumentNotFoundError(Exception):
+    """Ничего подходящего не нашлось — сообщение уже объясняет, почему."""
 
 
 def download_file(page, url, target_dir):
@@ -97,16 +114,25 @@ def find_and_download(query, target_dir='downloads', exact=False, headless=False
         page = browser.new_page()
         try:
             match = None
+            all_links = []
             for filetype in [None, *FALLBACK_FILETYPES]:
                 links = search_document_links(page, query, filetype=filetype)
+                all_links.extend(links)
                 match = pick_best_match(links, query, exact=exact)
                 if match:
                     break
             if match is None:
-                print(f'Документ по запросу «{query}» не найден.')
-                return None
+                unique_count = len(set(all_links))
+                if unique_count:
+                    message = (f'Документ по запросу «{query}» не найден '
+                               f'(проверено ссылок на документы: {unique_count}, '
+                               f'но ни одно имя файла не совпало с запросом).')
+                else:
+                    message = (f'Документ по запросу «{query}» не найден '
+                               f'(поиск не дал ни одной ссылки на документ — '
+                               f'проверьте формулировку запроса или доступность поисковика).')
+                raise DocumentNotFoundError(message)
             path = download_file(page, match, target_dir)
-            print(f'Скачано: {path}')
             if not headless:
                 time.sleep(2)
             return path
@@ -128,5 +154,10 @@ def parse_args():
 
 if __name__ == '__main__':
     args = parse_args()
-    find_and_download(args.query, target_dir=args.dir, exact=args.exact,
-                       headless=args.headless)
+    try:
+        path = find_and_download(args.query, target_dir=args.dir, exact=args.exact,
+                                  headless=args.headless)
+    except DocumentNotFoundError as e:
+        print(e)
+    else:
+        print(f'Скачано: {path}')
