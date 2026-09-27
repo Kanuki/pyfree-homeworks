@@ -48,11 +48,17 @@
     const ctx = canvas.getContext('2d');
 
     const RADIUS = 20;
+    const MIN_RADIUS = 6;
+    const MAX_RADIUS = 80;
     const SPEED = 4;
     const WHITE = '#ffffff';
     const RED = '#e03131';
     const SHRINK = 10;
-    const MIN_PLAYFIELD = 8 * RADIUS;
+    const MIN_PLAYFIELD = 4 * MAX_RADIUS;
+
+    function clamp(value, min, max) {
+      return Math.min(Math.max(value, min), max);
+    }
 
     let bounds = { left: 0, top: 0, right: 0, bottom: 0 };
 
@@ -84,13 +90,24 @@
     }
 
     function makeBall(opts = {}) {
-      const angle = opts.angle !== undefined ? opts.angle : Math.random() * Math.PI * 2;
+      const radius = opts.radius !== undefined ? opts.radius : RADIUS;
+      let vx;
+      let vy;
+      if (opts.vx !== undefined && opts.vy !== undefined) {
+        vx = opts.vx;
+        vy = opts.vy;
+      } else {
+        const angle = opts.angle !== undefined ? opts.angle : Math.random() * Math.PI * 2;
+        vx = Math.cos(angle) * SPEED;
+        vy = Math.sin(angle) * SPEED;
+      }
       return {
-        x: opts.x !== undefined ? opts.x : bounds.left + RADIUS + Math.random() * (bounds.right - bounds.left - 2 * RADIUS),
-        y: opts.y !== undefined ? opts.y : bounds.top + RADIUS + Math.random() * (bounds.bottom - bounds.top - 2 * RADIUS),
-        vx: Math.cos(angle) * SPEED,
-        vy: Math.sin(angle) * SPEED,
+        x: opts.x !== undefined ? opts.x : bounds.left + radius + Math.random() * (bounds.right - bounds.left - 2 * radius),
+        y: opts.y !== undefined ? opts.y : bounds.top + radius + Math.random() * (bounds.bottom - bounds.top - 2 * radius),
+        vx,
+        vy,
         color: opts.color || randomColor(),
+        radius,
       };
     }
 
@@ -110,23 +127,31 @@
       }
     }
 
+    // Collision outcomes:
+    //  - different-sized balls: a chaotic hit, 3 white balls burst outward
+    //  - same size + same color: they fuse into one ball twice as big
+    //  - same size + different color: both balls shrink by half
     function resolveCollisions() {
       const spawned = [];
+      const removed = new Set();
 
       for (let i = 0; i < balls.length; i++) {
+        if (removed.has(i)) continue;
         for (let j = i + 1; j < balls.length; j++) {
+          if (removed.has(j)) continue;
           const a = balls[i];
           const b = balls[j];
           const dx = b.x - a.x;
           const dy = b.y - a.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
+          const minDist = a.radius + b.radius;
 
-          if (dist === 0 || dist >= 2 * RADIUS) continue;
+          if (dist === 0 || dist >= minDist) continue;
 
           const nx = dx / dist;
           const ny = dy / dist;
 
-          const overlap = 2 * RADIUS - dist;
+          const overlap = minDist - dist;
           a.x -= (nx * overlap) / 2;
           a.y -= (ny * overlap) / 2;
           b.x += (nx * overlap) / 2;
@@ -140,18 +165,38 @@
 
           const midX = (a.x + b.x) / 2;
           const midY = (a.y + b.y) / 2;
-          for (let k = 0; k < 3; k++) {
+          const sameSize = Math.abs(a.radius - b.radius) < 0.01;
+
+          if (!sameSize) {
+            for (let k = 0; k < 3; k++) {
+              spawned.push(makeBall({
+                x: clamp(midX, bounds.left + RADIUS, bounds.right - RADIUS),
+                y: clamp(midY, bounds.top + RADIUS, bounds.bottom - RADIUS),
+                color: WHITE,
+              }));
+            }
+          } else if (a.color === b.color) {
+            removed.add(i);
+            removed.add(j);
             spawned.push(makeBall({
-              x: Math.min(Math.max(midX, bounds.left + RADIUS), bounds.right - RADIUS),
-              y: Math.min(Math.max(midY, bounds.top + RADIUS), bounds.bottom - RADIUS),
-              color: WHITE,
+              x: midX,
+              y: midY,
+              vx: a.vx,
+              vy: a.vy,
+              color: a.color,
+              radius: Math.min(a.radius * 2, MAX_RADIUS),
             }));
+          } else {
+            a.radius = Math.max(a.radius / 2, MIN_RADIUS);
+            b.radius = Math.max(b.radius / 2, MIN_RADIUS);
           }
         }
       }
 
-      if (spawned.length) {
-        balls.push(...spawned);
+      if (removed.size || spawned.length) {
+        const survivors = balls.filter((_, idx) => !removed.has(idx));
+        balls.length = 0;
+        balls.push(...survivors, ...spawned);
       }
     }
 
@@ -160,22 +205,22 @@
         ball.x += ball.vx;
         ball.y += ball.vy;
 
-        if (ball.x - RADIUS < bounds.left && ball.vx < 0) {
-          ball.x = bounds.left + RADIUS;
+        if (ball.x - ball.radius < bounds.left && ball.vx < 0) {
+          ball.x = bounds.left + ball.radius;
           ball.vx *= -1;
           if (isBlue(ball.color)) shrinkWall('left');
-        } else if (ball.x + RADIUS > bounds.right && ball.vx > 0) {
-          ball.x = bounds.right - RADIUS;
+        } else if (ball.x + ball.radius > bounds.right && ball.vx > 0) {
+          ball.x = bounds.right - ball.radius;
           ball.vx *= -1;
           if (isBlue(ball.color)) shrinkWall('right');
         }
 
-        if (ball.y - RADIUS < bounds.top && ball.vy < 0) {
-          ball.y = bounds.top + RADIUS;
+        if (ball.y - ball.radius < bounds.top && ball.vy < 0) {
+          ball.y = bounds.top + ball.radius;
           ball.vy *= -1;
           if (isBlue(ball.color)) shrinkWall('top');
-        } else if (ball.y + RADIUS > bounds.bottom && ball.vy > 0) {
-          ball.y = bounds.bottom - RADIUS;
+        } else if (ball.y + ball.radius > bounds.bottom && ball.vy > 0) {
+          ball.y = bounds.bottom - ball.radius;
           ball.vy *= -1;
           if (isBlue(ball.color)) shrinkWall('bottom');
         }
@@ -193,7 +238,7 @@
 
       for (const ball of balls) {
         ctx.beginPath();
-        ctx.arc(ball.x, ball.y, RADIUS, 0, Math.PI * 2);
+        ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
         ctx.fillStyle = ball.color;
         ctx.fill();
       }
