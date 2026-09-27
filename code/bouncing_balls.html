@@ -128,9 +128,9 @@
     }
 
     // Collision outcomes:
-    //  - different-sized balls: a chaotic hit, 3 white balls burst outward
-    //  - same size + same color: they fuse into one ball twice as big
-    //  - same size + different color: both balls shrink by half
+    //  - different color: a chaotic hit, 3 white balls burst outward
+    //  - same color + same size: they fuse into one ball twice as big
+    //  - same color + different size: both balls shrink by half
     function resolveCollisions() {
       const spawned = [];
       const removed = new Set();
@@ -165,9 +165,10 @@
 
           const midX = (a.x + b.x) / 2;
           const midY = (a.y + b.y) / 2;
+          const sameColor = a.color === b.color;
           const sameSize = Math.abs(a.radius - b.radius) < 0.01;
 
-          if (!sameSize) {
+          if (!sameColor) {
             for (let k = 0; k < 3; k++) {
               spawned.push(makeBall({
                 x: clamp(midX, bounds.left + RADIUS, bounds.right - RADIUS),
@@ -175,7 +176,7 @@
                 color: WHITE,
               }));
             }
-          } else if (a.color === b.color) {
+          } else if (sameSize) {
             removed.add(i);
             removed.add(j);
             spawned.push(makeBall({
