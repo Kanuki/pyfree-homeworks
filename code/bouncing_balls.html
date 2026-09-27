@@ -56,26 +56,74 @@
 
     const RADIUS = 20;
     const SPEED = 4;
+    const WHITE = '#ffffff';
 
+    // hue is random but saturation/lightness are fixed away from white,
+    // so this can never produce white
     function randomColor() {
       const hue = Math.floor(Math.random() * 360);
       return `hsl(${hue}, 80%, 55%)`;
     }
 
-    function makeBall() {
-      const angle = Math.random() * Math.PI * 2;
+    function makeBall(opts = {}) {
+      const angle = opts.angle !== undefined ? opts.angle : Math.random() * Math.PI * 2;
       return {
-        x: RADIUS + Math.random() * (canvas.width - 2 * RADIUS),
-        y: RADIUS + Math.random() * (canvas.height - 2 * RADIUS),
+        x: opts.x !== undefined ? opts.x : RADIUS + Math.random() * (canvas.width - 2 * RADIUS),
+        y: opts.y !== undefined ? opts.y : RADIUS + Math.random() * (canvas.height - 2 * RADIUS),
         vx: Math.cos(angle) * SPEED,
         vy: Math.sin(angle) * SPEED,
-        color: randomColor(),
+        color: opts.color || randomColor(),
       };
     }
 
     const balls = [makeBall()];
     let running = true;
     let animationId = null;
+
+    function resolveCollisions() {
+      const spawned = [];
+
+      for (let i = 0; i < balls.length; i++) {
+        for (let j = i + 1; j < balls.length; j++) {
+          const a = balls[i];
+          const b = balls[j];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist === 0 || dist >= 2 * RADIUS) continue;
+
+          const nx = dx / dist;
+          const ny = dy / dist;
+
+          const overlap = 2 * RADIUS - dist;
+          a.x -= (nx * overlap) / 2;
+          a.y -= (ny * overlap) / 2;
+          b.x += (nx * overlap) / 2;
+          b.y += (ny * overlap) / 2;
+
+          const relVel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+          a.vx -= relVel * nx;
+          a.vy -= relVel * ny;
+          b.vx += relVel * nx;
+          b.vy += relVel * ny;
+
+          const midX = (a.x + b.x) / 2;
+          const midY = (a.y + b.y) / 2;
+          for (let k = 0; k < 3; k++) {
+            spawned.push(makeBall({
+              x: Math.min(Math.max(midX, RADIUS), canvas.width - RADIUS),
+              y: Math.min(Math.max(midY, RADIUS), canvas.height - RADIUS),
+              color: WHITE,
+            }));
+          }
+        }
+      }
+
+      if (spawned.length) {
+        balls.push(...spawned);
+      }
+    }
 
     function step() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -99,7 +147,11 @@
           ball.y = canvas.height - RADIUS;
           ball.vy *= -1;
         }
+      }
 
+      resolveCollisions();
+
+      for (const ball of balls) {
         ctx.beginPath();
         ctx.arc(ball.x, ball.y, RADIUS, 0, Math.PI * 2);
         ctx.fillStyle = ball.color;
