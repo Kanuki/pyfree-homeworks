@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Прыгающие шарики</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #111;
+    font-family: sans-serif;
+  }
+  #controls {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 10;
+    display: flex;
+    gap: 8px;
+  }
+  button {
+    padding: 10px 18px;
+    font-size: 16px;
+    border: none;
+    border-radius: 6px;
+    background: #2d6cdf;
+    color: #fff;
+    cursor: pointer;
+  }
+  button:active {
+    background: #1e4fa8;
+  }
+  canvas {
+    display: block;
+  }
+</style>
+</head>
+<body>
+  <div id="controls">
+    <button id="toggleBtn">Стоп</button>
+    <button id="addBtn">Добавить</button>
+  </div>
+  <canvas id="scene"></canvas>
+
+  <script>
+    const canvas = document.getElementById('scene');
+    const ctx = canvas.getContext('2d');
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const RADIUS = 20;
+    const SPEED = 4;
+
+    function randomColor() {
+      const hue = Math.floor(Math.random() * 360);
+      return `hsl(${hue}, 80%, 55%)`;
+    }
+
+    function makeBall() {
+      const angle = Math.random() * Math.PI * 2;
+      return {
+        x: RADIUS + Math.random() * (canvas.width - 2 * RADIUS),
+        y: RADIUS + Math.random() * (canvas.height - 2 * RADIUS),
+        vx: Math.cos(angle) * SPEED,
+        vy: Math.sin(angle) * SPEED,
+        color: randomColor(),
+      };
+    }
+
+    const balls = [makeBall()];
+    let running = true;
+    let animationId = null;
+
+    function step() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      for (const ball of balls) {
+        ball.x += ball.vx;
+        ball.y += ball.vy;
+
+        if (ball.x - RADIUS < 0) {
+          ball.x = RADIUS;
+          ball.vx *= -1;
+        } else if (ball.x + RADIUS > canvas.width) {
+          ball.x = canvas.width - RADIUS;
+          ball.vx *= -1;
+        }
+
+        if (ball.y - RADIUS < 0) {
+          ball.y = RADIUS;
+          ball.vy *= -1;
+        } else if (ball.y + RADIUS > canvas.height) {
+          ball.y = canvas.height - RADIUS;
+          ball.vy *= -1;
+        }
+
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = ball.color;
+        ctx.fill();
+      }
+
+      if (running) {
+        animationId = requestAnimationFrame(step);
+      }
+    }
+
+    function start() {
+      if (!running) {
+        running = true;
+        toggleBtn.textContent = 'Стоп';
+        animationId = requestAnimationFrame(step);
+      }
+    }
+
+    function stop() {
+      running = false;
+      toggleBtn.textContent = 'Пуск';
+      if (animationId) {
+        cancelAnimationFrame(animationId);
+      }
+    }
+
+    const toggleBtn = document.getElementById('toggleBtn');
+    const addBtn = document.getElementById('addBtn');
+
+    toggleBtn.addEventListener('click', () => {
+      if (running) {
+        stop();
+      } else {
+        start();
+      }
+    });
+
+    addBtn.addEventListener('click', () => {
+      balls.push(makeBall());
+      if (!running) {
+        ctx.beginPath();
+        const ball = balls[balls.length - 1];
+        ctx.arc(ball.x, ball.y, RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = ball.color;
+        ctx.fill();
+      }
+    });
+
+    animationId = requestAnimationFrame(step);
+  </script>
+</body>
+</html>
