@@ -15,8 +15,9 @@
 ;;;                is farther from the turn centre and gives a too narrow band);
 ;;;   outer rear corner = tail swing at the start of a turn.
 ;;;
-;;; Steering limit is given by the OUTER turning radius measured at the body
-;;; (data sheets list it; for cars it is half of the wall-to-wall diameter).
+;;; Steering limit is derived from the OUTER turning radius (at the body or at
+;;; the outer front wheel, see below; for cars the body radius is half of the
+;;; wall-to-wall turning circle diameter).
 ;;; At the end the required steering angle is reported; if it exceeds the
 ;;; limit, the vehicle cannot follow this path.
 ;;;
@@ -31,13 +32,22 @@
 ;;; enough for an articulated vehicle (the inner edge may be set by a point on
 ;;; the trailer side), hence the extra side traces.
 ;;;
+;;; Turning radius can be given at the BODY (outer front corner; DIN 70020
+;;; "wall-to-wall") or at the outer front WHEEL (track circle, what Russian
+;;; data sheets usually list). A wheel radius must NOT be used as a body
+;;; radius: the body corner is farther out and the envelope would be too narrow.
+;;;
 ;;; Presets: Car = example from the article (VW Golf / BMW 3 class).
-;;;   Fire = fire engine AC 9.0 on KAMAZ-65111: wheelbase, overhangs and width
-;;;   given by the user; the outer radius 10.0 m is an ESTIMATE, not from a
-;;;   data sheet. 1.42 + 4.1 + 2.2 = 7.72 m while the stated length is ~9.3 m,
-;;;   so the rear overhang is probably understated (or the wheelbase is an
-;;;   equivalent one for the 6x4 bogie). Truck, Bus and the Semi tractor are
-;;;   also estimates -- enter your own values.
+;;;   Fire = fire engine AC 9.0 on KAMAZ-65111 (6x6), data from the user's list
+;;;   (not checked against a data sheet): wheelbase 4.1 m (front axle to the
+;;;   middle of the rear bogie), front overhang 1.42, width 2.5, tracks
+;;;   2.05 / 1.9, turning radius 11.3 m at the outer WHEEL. The list gives the
+;;;   rear overhang as 2.1-2.3 m but the overall length as 9.1-9.3 m; these do
+;;;   not add up (1.42 + 4.1 + 2.2 = 7.72 m). The preset takes the overhang
+;;;   that matches the length (3.7 m, measured from the bogie middle) because a
+;;;   too short tail UNDERestimates tail swing. Enter 2.2 to use the list value.
+;;;   Truck, Bus and the Semi tractor are estimates -- enter your own values.
+;;;   Wheel traces are drawn at track/2 + 0.15 m (half a tyre), see sp:tyre.
 ;;;
 ;;; Known limits (deliberate):
 ;;;   - one semi-trailer only; no drawbar trailers, no B-trains;
@@ -48,6 +58,8 @@
 ;;;     for radii above ~5 m; for tighter radii use a smaller step.
 
 (vl-load-com)
+
+(setq sp:tyre 0.15)                     ; half tyre width, m (assumption)
 
 ;; --- helpers ----------------------------------------------------------------
 
@@ -113,7 +125,8 @@
                   twl twr tfl2 tfr2
                   semi fw ltk tfo tro tw amax tp ht kp art maxa
                   ufl ufr url urr utfl utfr utrl utrr uwl uwr utp
-                  stns usl usr cl cr tr1)
+                  stns usl usr cl cr tr1
+                  ftk rtk rty fwo rwo rbody)
 
   ;; --- input
   (setq sc (sp:ask "Edinits chertezha v 1 m (m=1, mm=1000)" 1.0))
@@ -121,17 +134,26 @@
   (initget "Car Truck Bus Semi Fire")
   (setq kw (getkword "\nTip TS [Car/Truck/Bus/Semi(avtofura)/Fire(pozhmash)] <Truck>: "))
   (if (null kw) (setq kw "Truck"))
-  ;; wheelbase, front overhang, rear overhang, width, outer turning radius (m)
-  (setq pr (cond ((= kw "Car")   '(2.7 0.9 1.1 1.85 5.6))
-                 ((= kw "Bus")   '(6.0 2.7 3.3 2.55 12.1))
-                 ((= kw "Semi")  '(3.8 1.4 0.8 2.55 7.6))
-                 ((= kw "Fire")  '(4.1 1.42 2.2 2.5 10.0))
-                 (t              '(4.5 1.5 2.5 2.5 9.8))))
-  (setq wb    (sp:ask "Baza (mezhdu osyami), m"              (nth 0 pr))
+  ;; wheelbase, front overhang, rear overhang, width, turning radius,
+  ;; front track, rear track (m), radius type (Kuzov = body, Koleso = wheel)
+  ;; Rear overhang is measured from the rear axle reference point (for a
+  ;; bogie: its middle, the same point the wheelbase is measured to).
+  (setq pr (cond ((= kw "Car")   '(2.7 0.9 1.1 1.85 5.6 1.55 1.55 "Kuzov"))
+                 ((= kw "Bus")   '(6.0 2.7 3.3 2.55 12.1 2.25 2.25 "Kuzov"))
+                 ((= kw "Semi")  '(3.8 1.4 0.8 2.55 7.6 2.25 2.25 "Kuzov"))
+                 ((= kw "Fire")  '(4.1 1.42 3.7 2.5 11.3 2.05 1.9 "Koleso"))
+                 (t              '(4.5 1.5 2.5 2.5 9.8 2.2 2.2 "Kuzov"))))
+  (setq wb    (sp:ask "Baza (do serediny zadnei telezhki), m" (nth 0 pr))
         ovf   (sp:ask "Perednii sves, m"                     (nth 1 pr))
-        ovr   (sp:ask "Zadnii sves, m"                      (nth 2 pr))
+        ovr   (sp:ask "Zadnii sves (ot serediny telezhki), m" (nth 2 pr))
         wd    (sp:ask "Shirina kuzova, m"                    (nth 3 pr))
-        rout  (sp:ask "Vneshnii radius razvorota (po kuzovu), m" (nth 4 pr))
+        ftk   (sp:ask "Koleya perednikh koles, m"            (nth 5 pr))
+        rtk   (sp:ask "Koleya zadnikh koles, m"              (nth 6 pr)))
+  (initget "Kuzov Koleso")
+  (setq rty (getkword (strcat "\nRadius razvorota izmeren po [Kuzov/Koleso] <"
+                              (nth 7 pr) ">: ")))
+  (if (null rty) (setq rty (nth 7 pr)))
+  (setq rout  (sp:ask (strcat "Radius razvorota (" rty "), m") (nth 4 pr))
         ds    (sp:ask "Shag modelirovaniya, m"               0.25)
         ivl   (sp:ask "Interval konturov kuzova, m"          3.0))
 
@@ -146,16 +168,30 @@
           tw   (sp:ask  "Shirina polupritsepa, m"                    2.55)
           amax (sp:ask  "Maks. ugol v sedelnom ustroistve, grad"     90.0)))
 
-  ;; rear axle radius at full lock: R_out^2 = (Rrear + w/2)^2 + (wb+fo)^2
-  (if (<= rout (+ wb ovf))
-    (progn (princ "\nVneshnii radius ne bolshe rasstoyaniya ot zadnei osi do bampera -- tak ne byvaet.")
-           (exit)))
-  (setq rrear (- (sqrt (- (* rout rout) (* (+ wb ovf) (+ wb ovf)))) (/ wd 2.0)))
+  ;; rear axle radius at full lock (Rrear = distance from the turn centre to
+  ;; the rear axle centre):
+  ;;   body:  R_out^2 = (Rrear + w/2)^2   + (wb+fo)^2
+  ;;   wheel: R_out^2 = (Rrear + ftk/2)^2 + wb^2
+  (if (= rty "Koleso")
+    (progn
+      (if (<= rout wb)
+        (progn (princ "\nRadius po kolesu ne bolshe bazy -- tak ne byvaet.") (exit)))
+      (setq rrear (- (sqrt (- (* rout rout) (* wb wb))) (/ ftk 2.0))))
+    (progn
+      (if (<= rout (+ wb ovf))
+        (progn (princ "\nVneshnii radius ne bolshe rasstoyaniya ot zadnei osi do bampera -- tak ne byvaet.")
+               (exit)))
+      (setq rrear (- (sqrt (- (* rout rout) (* (+ wb ovf) (+ wb ovf)))) (/ wd 2.0)))))
   (if (<= rrear 0.0)
-    (progn (princ "\nVneshnii radius slishkom mal dlya etoi shiriny i bazy.") (exit)))
+    (progn (princ "\nRadius slishkom mal dlya etikh razmerov.") (exit)))
   (setq maxst (* (atan wb rrear) (/ 180.0 pi)))     ; steering angle, deg
+  ;; equivalent radius of the outer front body corner (for the report)
+  (setq rbody (sqrt (+ (* (+ rrear (/ wd 2.0)) (+ rrear (/ wd 2.0)))
+                       (* (+ wb ovf) (+ wb ovf)))))
 
   ;; to drawing units
+  (setq fwo (* (+ (/ ftk 2.0) sp:tyre) sc)          ; wheel offsets from axis
+        rwo (* (+ (/ rtk 2.0) sp:tyre) sc))
   (setq wb (* wb sc) ovf (* ovf sc) ovr (* ovr sc) wd (* wd sc)
         ds (* ds sc) ivl (* ivl sc))
   (if semi
@@ -235,11 +271,11 @@
     (setq trfl (cons fl trfl) trfr (cons fr trfr)
           trrl (cons rl trrl) trrr (cons rr trrr)
           trf  (cons f trf)   trr  (cons r trr)
-          ;; axle ends = wheels (track taken equal to the body width)
-          twl  (cons (sp:pt r h 0.0 (/ wd 2.0)) twl)
-          twr  (cons (sp:pt r h 0.0 (- (/ wd 2.0))) twr)
-          tfl2 (cons (sp:pt r h wb (/ wd 2.0)) tfl2)
-          tfr2 (cons (sp:pt r h wb (- (/ wd 2.0))) tfr2))
+          ;; axle ends = outer tyre edges (track/2 + half tyre)
+          twl  (cons (sp:pt r h 0.0 rwo) twl)
+          twr  (cons (sp:pt r h 0.0 (- rwo)) twr)
+          tfl2 (cons (sp:pt r h wb fwo) tfl2)
+          tfr2 (cons (sp:pt r h wb (- fwo)) tfr2))
 
     ;; semi-trailer: axle chases the kingpin, heading = axle -> kingpin
     (if semi
@@ -303,6 +339,9 @@
   (princ (strcat "\nShagov: " (itoa (length dist))
                  ", konturov kuzova: " (itoa nbody)
                  ", dlina puti: " (rtos (/ total sc) 2 2) " m"))
+  (princ (strcat "\nDlina TS po modeli: "
+                 (rtos (/ (+ wb ovf ovr) sc) 2 2) " m; raschetnyi radius po kuzovu: "
+                 (rtos rbody 2 2) " m"))
   (princ (strcat "\nMaks. ugol rulenia na traektorii: "
                  (rtos (* maxd (/ 180.0 pi)) 2 1) " grad (predel "
                  (rtos maxst 2 1) ")"))
