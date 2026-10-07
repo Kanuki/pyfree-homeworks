@@ -1,59 +1,69 @@
-;;; swept_path.lsp -- упрощённый аналог Swept Path Analysis для AutoCAD (AutoLISP)
+;;; swept_path.lsp -- simplified swept path analysis for AutoCAD (AutoLISP)
 ;;;
-;;; Команда: SWEPT
-;;;   Моделирует проезд двухосного ТС по траектории и строит:
-;;;     - контуры кузова через заданный интервал  (слой SWEPT-BODY)
-;;;     - следы четырёх углов кузова               (слой SWEPT-ENV)
-;;;     - следы концов обеих осей = колёса         (слой SWEPT-WHEEL)
-;;;     - следы середин осей: передняя (= траектория) и задняя (SWEPT-AXLE)
-;;;   Границы огибающей (см. pathsweeper.com/en/guides/swept-path-analysis):
-;;;     внешняя  = след внешнего ПЕРЕДНЕГО УГЛА кузова;
-;;;     внутренняя = след внутреннего ЗАДНЕГО КОЛЕСА (не угла: угол лежит
-;;;                  дальше от центра поворота и даёт заниженную полосу);
-;;;     задний внешний угол -- свес хвоста в начале поворота (tail swing).
-;;;   Предел руления задаётся внешним радиусом разворота по кузову (его дают
-;;;   паспорта; для легковых это половина диаметра разворота "стена-стена").
-;;;   В конце выводится требуемый угол руления; если он выше предельного --
-;;;   ТС по такой траектории не проедет.
+;;; Command: SWEPT   (all prompts are in transliterated Russian, ASCII only)
 ;;;
-;;; Модель: кинематическая, велосипедная.
-;;;   Выбранная кривая = траектория середины ПЕРЕДНЕЙ оси.
-;;;   Середина задней оси движется "за" передней на расстоянии базы L
-;;;   (нет бокового проскальзывания задних колёс).
+;;; Simulates a vehicle driving along a path and draws:
+;;;   - body outlines at a given interval          (layer SWEPT-BODY)
+;;;   - traces of the four body corners            (layer SWEPT-ENV)
+;;;   - traces of both axle ends = wheels          (layer SWEPT-WHEEL)
+;;;   - traces of axle centres: front (= the path) and rear (layer SWEPT-AXLE)
+;;;   - for Semi: traces of points along the trailer sides (layer SWEPT-SIDE)
 ;;;
-;;; Автофура (тип Semi): седельный тягач + полуприцеп. Шкворень лежит на
-;;;   оси тягача на расстоянии fw впереди его задней оси; ось (тележка)
-;;;   полуприцепа тянется за шкворнем на расстоянии ltk -- та же схема
-;;;   "ведомая точка догоняет ведущую", что и для задней оси тягача.
-;;;   Для сочленённого ТС четырёх углов мало (внутренний край может задавать
-;;;   точка на боку полуприцепа), поэтому дополнительно трассируются точки
-;;;   вдоль бортов полуприцепа (слой SWEPT-SIDE).
+;;; Envelope boundaries (see pathsweeper.com/en/guides/swept-path-analysis):
+;;;   outer edge = trace of the outer FRONT CORNER of the body;
+;;;   inner edge = trace of the inner REAR WHEEL (not the corner: the corner
+;;;                is farther from the turn centre and gives a too narrow band);
+;;;   outer rear corner = tail swing at the start of a turn.
 ;;;
-;;; Ограничения (сознательные):
-;;;   - один прицеп (седельный); дышло, роспуск, B-train не поддерживаются;
-;;;   - движение только вперёд, по направлению построения кривой;
-;;;   - углы траектории (ломаная с острыми вершинами) дадут скачок угла руления --
-;;;     рисуйте траекторию плавной (дуги, сплайн, скруглённая полилиния);
-;;;   - точность зависит от шага: при шаге 0.25 м ошибка заметно меньше 1 см
-;;;     на радиусах от ~5 м, на меньших радиусах уменьшайте шаг.
+;;; Steering limit is given by the OUTER turning radius measured at the body
+;;; (data sheets list it; for cars it is half of the wall-to-wall diameter).
+;;; At the end the required steering angle is reported; if it exceeds the
+;;; limit, the vehicle cannot follow this path.
+;;;
+;;; Model: kinematic, bicycle. The selected curve is the path of the FRONT
+;;; axle centre. The rear axle centre follows it at a distance equal to the
+;;; wheelbase (no lateral slip of the rear wheels).
+;;;
+;;; Semi (articulated truck): tractor + semi-trailer. The kingpin lies on the
+;;; tractor axis, distance fw ahead of its rear axle; the trailer axle (bogie
+;;; centre) follows the kingpin at distance ltk -- same "follower chases the
+;;; leader" scheme as the rear axle of the tractor. Four corners are not
+;;; enough for an articulated vehicle (the inner edge may be set by a point on
+;;; the trailer side), hence the extra side traces.
+;;;
+;;; Presets: Car = example from the article (VW Golf / BMW 3 class).
+;;;   Fire = fire engine AC 9.0 on KAMAZ-65111: wheelbase, overhangs and width
+;;;   given by the user; the outer radius 10.0 m is an ESTIMATE, not from a
+;;;   data sheet. 1.42 + 4.1 + 2.2 = 7.72 m while the stated length is ~9.3 m,
+;;;   so the rear overhang is probably understated (or the wheelbase is an
+;;;   equivalent one for the 6x4 bogie). Truck, Bus and the Semi tractor are
+;;;   also estimates -- enter your own values.
+;;;
+;;; Known limits (deliberate):
+;;;   - one semi-trailer only; no drawbar trailers, no B-trains;
+;;;   - forward motion only, in the direction the curve was drawn;
+;;;   - a sharp polyline vertex gives a jump of the steering angle -- draw a
+;;;     smooth path (arcs, spline, filleted polyline);
+;;;   - accuracy depends on the step: at 0.25 m the error is well below 1 cm
+;;;     for radii above ~5 m; for tighter radii use a smaller step.
 
 (vl-load-com)
 
-;; --- вспомогательные функции ------------------------------------------------
+;; --- helpers ----------------------------------------------------------------
 
 (defun sp:ask (msg def / x)
-  (initget 6)                           ; только > 0
+  (initget 6)                           ; > 0 only
   (setq x (getreal (strcat "\n" msg " <" (rtos def 2 2) ">: ")))
   (if x x def)
 )
 
-(defun sp:ask0 (msg def / x)            ; допускает 0
-  (initget 4)                           ; только >= 0
+(defun sp:ask0 (msg def / x)            ; zero allowed
+  (initget 4)                           ; >= 0 only
   (setq x (getreal (strcat "\n" msg " <" (rtos def 2 2) ">: ")))
   (if x x def)
 )
 
-;; нормализация угла в (-pi; pi]
+;; normalise angle to (-pi; pi]
 (defun sp:angdiff (a b / d)
   (setq d (- a b))
   (while (> d pi) (setq d (- d (* 2 pi))))
@@ -61,7 +71,7 @@
   d
 )
 
-;; точка от начала o при курсе ang: dx вперёд, dy влево
+;; point from origin o with heading ang: dx forward, dy to the left
 (defun sp:pt (o ang dx dy)
   (list (+ (car o) (* dx (cos ang)) (- (* dy (sin ang))))
         (+ (cadr o) (* dx (sin ang)) (* dy (cos ang)))
@@ -89,13 +99,13 @@
   )
 )
 
-;; допустим ли объект как траектория (кривая с параметрами)
+;; is the object usable as a path (a curve with parameters)?
 (defun sp:curve-p (en / r)
   (setq r (vl-catch-all-apply 'vlax-curve-getEndParam (list en)))
   (and (not (vl-catch-all-error-p r)) (numberp r))
 )
 
-;; --- основная команда -------------------------------------------------------
+;; --- main command -----------------------------------------------------------
 
 (defun c:SWEPT (/ sc kw pr wb ovf ovr wd rout rrear maxst ds ivl sel en total
                   n i dist p0 tg fp f r h v len vel delta maxd nextd
@@ -105,70 +115,63 @@
                   ufl ufr url urr utfl utfr utrl utrr uwl uwr utp
                   stns usl usr cl cr tr1)
 
-  ;; --- ввод параметров
-  (setq sc (sp:ask "Единиц чертежа в 1 м (м=1, мм=1000)" 1.0))
+  ;; --- input
+  (setq sc (sp:ask "Edinits chertezha v 1 m (m=1, mm=1000)" 1.0))
 
   (initget "Car Truck Bus Semi Fire")
-  (setq kw (getkword "\nТип ТС [Car/Truck/Bus/Semi(автофура)/Fire(пожмаш)] <Truck>: "))
+  (setq kw (getkword "\nTip TS [Car/Truck/Bus/Semi(avtofura)/Fire(pozhmash)] <Truck>: "))
   (if (null kw) (setq kw "Truck"))
-  ;; база, передний свес, задний свес, ширина, внешний радиус разворота (м)
-  ;; Car -- пример из статьи (VW Golf / BMW 3). Truck, Bus и тягач Semi --
-  ;; МОИ прикидки, не паспортные данные: вводите свои значения.
+  ;; wheelbase, front overhang, rear overhang, width, outer turning radius (m)
   (setq pr (cond ((= kw "Car")   '(2.7 0.9 1.1 1.85 5.6))
                  ((= kw "Bus")   '(6.0 2.7 3.3 2.55 12.1))
                  ((= kw "Semi")  '(3.8 1.4 0.8 2.55 7.6))
-                 ;; Fire: АЦ 9,0 на КАМАЗ-65111 -- база/свесы/ширина заданы
-                 ;; пользователем. Внешний радиус 10.0 м -- МОЯ прикидка, в
-                 ;; паспорте не проверялась. Сумма 1.42+4.1+2.2 = 7.72 м, а
-                 ;; заявленная длина ~9.3 м: задний свес, вероятно, занижен
-                 ;; (или база дана как эквивалентная для тележки 6x4).
                  ((= kw "Fire")  '(4.1 1.42 2.2 2.5 10.0))
                  (t              '(4.5 1.5 2.5 2.5 9.8))))
-  (setq wb    (sp:ask "База (между осями), м"        (nth 0 pr))
-        ovf   (sp:ask "Передний свес, м"             (nth 1 pr))
-        ovr   (sp:ask "Задний свес, м"               (nth 2 pr))
-        wd    (sp:ask "Ширина кузова, м"             (nth 3 pr))
-        rout  (sp:ask "Внешний радиус разворота (по кузову), м" (nth 4 pr))
-        ds    (sp:ask "Шаг моделирования, м"         0.25)
-        ivl   (sp:ask "Интервал контуров кузова, м"  3.0))
+  (setq wb    (sp:ask "Baza (mezhdu osyami), m"              (nth 0 pr))
+        ovf   (sp:ask "Perednii sves, m"                     (nth 1 pr))
+        ovr   (sp:ask "Zadnii sves, m"                      (nth 2 pr))
+        wd    (sp:ask "Shirina kuzova, m"                    (nth 3 pr))
+        rout  (sp:ask "Vneshnii radius razvorota (po kuzovu), m" (nth 4 pr))
+        ds    (sp:ask "Shag modelirovaniya, m"               0.25)
+        ivl   (sp:ask "Interval konturov kuzova, m"          3.0))
 
   (setq semi (= kw "Semi"))
   (if semi
-    ;; полуприцеп: 7.7 + 4.3 = 12.0 м от шкворня до задней кромки (лимит ЕС),
-    ;; 1.6 м вперёд от шкворня -- вместе 13.6 м; всё равно проверьте по паспорту
-    (setq fw   (sp:ask0 "Шкворень впереди задней оси тягача, м" 0.0)
-          ltk  (sp:ask "Шкворень -- ось (тележка) полуприцепа, м" 7.7)
-          tfo  (sp:ask "Полуприцеп: свес вперёд от шкворня, м"   1.6)
-          tro  (sp:ask "Полуприцеп: свес назад за осью, м"        4.3)
-          tw   (sp:ask "Ширина полуприцепа, м"                    2.55)
-          amax (sp:ask "Макс. угол в седельном устройстве, град"  90.0)))
+    ;; semi-trailer: 7.7 + 4.3 = 12.0 m from kingpin to the rear edge (EU
+    ;; limit), 1.6 m ahead of the kingpin -- 13.6 m in total; check the data sheet
+    (setq fw   (sp:ask0 "Shkvoren vperedi zadnei osi tyagacha, m"   0.0)
+          ltk  (sp:ask  "Shkvoren -- os (telezhka) polupritsepa, m" 7.7)
+          tfo  (sp:ask  "Polupritsep: sves vpered ot shkvorenya, m" 1.6)
+          tro  (sp:ask  "Polupritsep: sves nazad za osyu, m"        4.3)
+          tw   (sp:ask  "Shirina polupritsepa, m"                    2.55)
+          amax (sp:ask  "Maks. ugol v sedelnom ustroistve, grad"     90.0)))
 
-  ;; радиус задней оси при предельном руле: R_out^2 = (Rз + w/2)^2 + (wb+fo)^2
+  ;; rear axle radius at full lock: R_out^2 = (Rrear + w/2)^2 + (wb+fo)^2
   (if (<= rout (+ wb ovf))
-    (progn (princ "\nВнешний радиус не больше расстояния от задней оси до бампера -- так не бывает.")
+    (progn (princ "\nVneshnii radius ne bolshe rasstoyaniya ot zadnei osi do bampera -- tak ne byvaet.")
            (exit)))
   (setq rrear (- (sqrt (- (* rout rout) (* (+ wb ovf) (+ wb ovf)))) (/ wd 2.0)))
   (if (<= rrear 0.0)
-    (progn (princ "\nВнешний радиус слишком мал для этой ширины и базы.") (exit)))
-  (setq maxst (* (atan wb rrear) (/ 180.0 pi)))     ; угол руления, град
+    (progn (princ "\nVneshnii radius slishkom mal dlya etoi shiriny i bazy.") (exit)))
+  (setq maxst (* (atan wb rrear) (/ 180.0 pi)))     ; steering angle, deg
 
-  ;; в единицы чертежа
+  ;; to drawing units
   (setq wb (* wb sc) ovf (* ovf sc) ovr (* ovr sc) wd (* wd sc)
         ds (* ds sc) ivl (* ivl sc))
   (if semi
     (setq fw (* fw sc) ltk (* ltk sc) tfo (* tfo sc) tro (* tro sc) tw (* tw sc)))
 
-  ;; --- выбор траектории
+  ;; --- path selection
   (setq en nil)
   (while (null en)
-    (setq sel (entsel "\nТраектория середины передней оси (полилиния/дуга/сплайн): "))
-    (cond ((null sel) (princ "\nОтмена.") (exit))
+    (setq sel (entsel "\nTraektoriya serediny perednei osi (polilinia/duga/splain): "))
+    (cond ((null sel) (princ "\nOtmena.") (exit))
           ((sp:curve-p (car sel)) (setq en (car sel)))
-          (t (princ "\nЭто не кривая, выберите другой объект."))))
+          (t (princ "\nEto ne krivaya, vyberite drugoi obekt."))))
 
   (setq total (vlax-curve-getDistAtParam en (vlax-curve-getEndParam en)))
   (if (< total (* 2 ds))
-    (progn (princ "\nТраектория слишком короткая для выбранного шага.") (exit)))
+    (progn (princ "\nTraektoriya slishkom korotkaya dlya vybrannogo shaga.") (exit)))
 
   (sp:layer "SWEPT-BODY" 8)
   (sp:layer "SWEPT-ENV"  1)
@@ -178,11 +181,11 @@
 
   (command "_.undo" "_begin")
 
-  ;; --- начальное состояние: ТС стоит вдоль касательной в начале кривой
+  ;; --- initial state: vehicle stands along the tangent at the curve start
   (setq p0 (vlax-curve-getPointAtDist en 0.0)
         tg (vlax-curve-getFirstDeriv en (vlax-curve-getStartParam en))
         h  (atan (cadr tg) (car tg))
-        r  (sp:pt p0 h (- wb) 0.0)       ; задняя ось на базу позади передней
+        r  (sp:pt p0 h (- wb) 0.0)       ; rear axle one wheelbase behind the front
         fp p0
         maxd 0.0
         nextd 0.0
@@ -191,30 +194,30 @@
         n  (fix (/ total ds)))
   (if semi
     (setq kp   (sp:pt r h fw 0.0)
-          tp   (sp:pt kp h (- ltk) 0.0)  ; полуприцеп стоит вытянутым
+          tp   (sp:pt kp h (- ltk) 0.0)  ; trailer starts straight
           ht   h
           stns (list ltk (* 0.5 ltk) (* -0.5 tro))
           usl  (mapcar '(lambda (x) nil) stns)
           usr  (mapcar '(lambda (x) nil) stns)))
 
-  ;; список расстояний: 0, ds, 2ds, ... и точный конец
+  ;; list of distances: 0, ds, 2ds, ... and the exact end
   (setq i 0)
   (repeat (1+ n)
     (setq dist (cons (* i ds) dist) i (1+ i)))
   (if (< (car dist) (- total 1e-9)) (setq dist (cons total dist)))
   (setq dist (reverse dist))
 
-  ;; --- пошаговое моделирование
+  ;; --- step-by-step simulation
   (foreach d dist
     (setq f (vlax-curve-getPointAtDist en d))
     (if (> d 0.0)
       (progn
-        ;; задняя ось смотрит на переднюю: |F-R| = wb, R сдвигается вдоль курса
+        ;; rear axle looks at the front one: |F-R| = wb, R moves along the heading
         (setq v   (list (- (car f) (car r)) (- (cadr f) (cadr r)))
               len (distance '(0.0 0.0) v)
               h   (atan (cadr v) (car v))
               r   (sp:pt f h (- wb) 0.0))
-        ;; угол руления = поворот скорости передней оси относительно курса
+        ;; steering angle = front axle velocity direction relative to heading
         (if (> (distance f fp) 1e-9)
           (progn
             (setq vel   (angle fp f)
@@ -224,7 +227,7 @@
     )
     (setq fp f)
 
-    ;; углы кузова (задняя ось = r, курс = h)
+    ;; body corners (rear axle = r, heading = h)
     (setq fl (sp:pt r h (+ wb ovf) (/ wd 2.0))
           fr (sp:pt r h (+ wb ovf) (- (/ wd 2.0)))
           rl (sp:pt r h (- ovr)     (/ wd 2.0))
@@ -232,13 +235,13 @@
     (setq trfl (cons fl trfl) trfr (cons fr trfr)
           trrl (cons rl trrl) trrr (cons rr trrr)
           trf  (cons f trf)   trr  (cons r trr)
-          ;; концы осей = колёса (ширина колеи принята равной ширине кузова)
+          ;; axle ends = wheels (track taken equal to the body width)
           twl  (cons (sp:pt r h 0.0 (/ wd 2.0)) twl)
           twr  (cons (sp:pt r h 0.0 (- (/ wd 2.0))) twr)
           tfl2 (cons (sp:pt r h wb (/ wd 2.0)) tfl2)
           tfr2 (cons (sp:pt r h wb (- (/ wd 2.0))) tfr2))
 
-    ;; полуприцеп: ось тянется за шкворнем, курс = направление ось -> шкворень
+    ;; semi-trailer: axle chases the kingpin, heading = axle -> kingpin
     (if semi
       (progn
         (setq kp (sp:pt r h fw 0.0))
@@ -257,13 +260,13 @@
               utp  (cons tp utp)
               uwl  (cons (sp:pt tp ht 0.0 (/ tw 2.0)) uwl)
               uwr  (cons (sp:pt tp ht 0.0 (- (/ tw 2.0))) uwr))
-        ;; точки вдоль бортов (внутренний край может задавать не угол и не колесо)
+        ;; points along the sides (the inner edge may be neither corner nor wheel)
         (setq cl  (mapcar '(lambda (x) (sp:pt tp ht x (/ tw 2.0))) stns)
               cr  (mapcar '(lambda (x) (sp:pt tp ht x (- (/ tw 2.0)))) stns)
               usl (mapcar '(lambda (a q) (cons q a)) usl cl)
               usr (mapcar '(lambda (a q) (cons q a)) usr cr))))
 
-    ;; контур кузова через интервал и в последней точке
+    ;; body outline every interval and at the last point
     (if (or (>= d nextd) (= d total))
       (progn
         (sp:pline (list fl fr rr rl) T "SWEPT-BODY")
@@ -272,7 +275,7 @@
         (while (<= nextd d) (setq nextd (+ nextd ivl)))))
   )
 
-  ;; --- следы
+  ;; --- traces
   (sp:pline (reverse trfl) nil "SWEPT-ENV")
   (sp:pline (reverse trfr) nil "SWEPT-ENV")
   (sp:pline (reverse trrl) nil "SWEPT-ENV")
@@ -296,30 +299,30 @@
 
   (command "_.undo" "_end")
 
-  ;; --- отчёт
-  (princ (strcat "\nШагов: " (itoa (length dist))
-                 ", контуров кузова: " (itoa nbody)
-                 ", длина пути: " (rtos (/ total sc) 2 2) " м"))
-  (princ (strcat "\nМакс. угол руления на траектории: "
-                 (rtos (* maxd (/ 180.0 pi)) 2 1) " град (предел "
+  ;; --- report
+  (princ (strcat "\nShagov: " (itoa (length dist))
+                 ", konturov kuzova: " (itoa nbody)
+                 ", dlina puti: " (rtos (/ total sc) 2 2) " m"))
+  (princ (strcat "\nMaks. ugol rulenia na traektorii: "
+                 (rtos (* maxd (/ 180.0 pi)) 2 1) " grad (predel "
                  (rtos maxst 2 1) ")"))
   (if (> maxd 1e-6)
     (progn
       (setq rmin (/ (/ wb (sin (min maxd (/ pi 2.0)))) sc))
-      (princ (strcat "\nМин. радиус по оси передних колёс на траектории: "
-                     (rtos rmin 2 2) " м"))))
+      (princ (strcat "\nMin. radius po osi perednikh koles na traektorii: "
+                     (rtos rmin 2 2) " m"))))
   (if semi
     (progn
-      (princ (strcat "\nМакс. угол в седельном устройстве: "
-                     (rtos (* maxa (/ 180.0 pi)) 2 1) " град (предел "
+      (princ (strcat "\nMaks. ugol v sedelnom ustroistve: "
+                     (rtos (* maxa (/ 180.0 pi)) 2 1) " grad (predel "
                      (rtos amax 2 1) ")"))
       (if (> (* maxa (/ 180.0 pi)) amax)
-        (princ "\n*** ВНИМАНИЕ: угол складывания превышает предел -- тягач упрётся в полуприцеп. ***"))))
+        (princ "\n*** VNIMANIE: ugol skladyvaniya previshaet predel -- tyagach upretsya v polupritsep. ***"))))
   (if (> (* maxd (/ 180.0 pi)) maxst)
-    (princ "\n*** ВНИМАНИЕ: требуемый угол руления превышает предел -- ТС так не проедет, смягчите траекторию. ***")
-    (princ "\nУгол руления в пределах нормы."))
+    (princ "\n*** VNIMANIE: trebuemyi ugol rulenia previshaet predel -- TS tak ne proedet, smyagchite traektoriyu. ***")
+    (princ "\nUgol rulenia v predelakh normy."))
   (princ)
 )
 
-(princ "\nswept_path.lsp загружен. Команда: SWEPT")
+(princ "\nswept_path.lsp zagruzhen. Komanda: SWEPT")
 (princ)
