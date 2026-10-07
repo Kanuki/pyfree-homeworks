@@ -3,10 +3,18 @@
 ;;; Команда: SWEPT
 ;;;   Моделирует проезд двухосного ТС по траектории и строит:
 ;;;     - контуры кузова через заданный интервал  (слой SWEPT-BODY)
-;;;     - следы четырёх углов кузова = огибающая  (слой SWEPT-ENV)
-;;;     - следы осей: передняя (по траектории) и задняя (слой SWEPT-AXLE)
-;;;   В конце выводит максимальный угол руления и предупреждает, если он
-;;;   превышает предел для выбранного ТС (т.е. ТС по такой траектории не проедет).
+;;;     - следы четырёх углов кузова               (слой SWEPT-ENV)
+;;;     - следы концов обеих осей = колёса         (слой SWEPT-WHEEL)
+;;;     - следы середин осей: передняя (= траектория) и задняя (SWEPT-AXLE)
+;;;   Границы огибающей (см. pathsweeper.com/en/guides/swept-path-analysis):
+;;;     внешняя  = след внешнего ПЕРЕДНЕГО УГЛА кузова;
+;;;     внутренняя = след внутреннего ЗАДНЕГО КОЛЕСА (не угла: угол лежит
+;;;                  дальше от центра поворота и даёт заниженную полосу);
+;;;     задний внешний угол -- свес хвоста в начале поворота (tail swing).
+;;;   Предел руления задаётся внешним радиусом разворота по кузову (его дают
+;;;   паспорта; для легковых это половина диаметра разворота "стена-стена").
+;;;   В конце выводится требуемый угол руления; если он выше предельного --
+;;;   ТС по такой траектории не проедет.
 ;;;
 ;;; Модель: кинематическая, велосипедная.
 ;;;   Выбранная кривая = траектория середины ПЕРЕДНЕЙ оси.
@@ -75,10 +83,10 @@
 
 ;; --- основная команда -------------------------------------------------------
 
-(defun c:SWEPT (/ sc kw pr wb ovf ovr wd maxst ds ivl sel en total n i dist
-                  p0 tg fp f r h v len vel delta maxd nextd
-                  fl fr rl rr trfl trfr trrl trrr trf trr bodies nbody
-                  rmin)
+(defun c:SWEPT (/ sc kw pr wb ovf ovr wd rout rrear maxst ds ivl sel en total
+                  n i dist p0 tg fp f r h v len vel delta maxd nextd
+                  fl fr rl rr trfl trfr trrl trrr trf trr nbody rmin
+                  twl twr tfl2 tfr2)
 
   ;; --- ввод параметров
   (setq sc (sp:ask "Единиц чертежа в 1 м (м=1, мм=1000)" 1.0))
@@ -86,17 +94,28 @@
   (initget "Car Truck Bus")
   (setq kw (getkword "\nТип ТС [Car/Truck/Bus] <Truck>: "))
   (if (null kw) (setq kw "Truck"))
-  ;; база, передний свес, задний свес, ширина (м), макс. угол руления (град)
-  (setq pr (cond ((= kw "Car")   '(2.7 0.9 1.0 1.8 35.0))
-                 ((= kw "Bus")   '(6.0 2.7 3.3 2.55 40.0))
-                 (t              '(4.5 1.5 2.5 2.5 35.0))))
-  (setq wb    (sp:ask "База (между осями), м"      (nth 0 pr))
-        ovf   (sp:ask "Передний свес, м"           (nth 1 pr))
-        ovr   (sp:ask "Задний свес, м"             (nth 2 pr))
-        wd    (sp:ask "Ширина кузова, м"           (nth 3 pr))
-        maxst (sp:ask "Макс. угол руления, град"   (nth 4 pr))
-        ds    (sp:ask "Шаг моделирования, м"       0.25)
-        ivl   (sp:ask "Интервал контуров кузова, м" 3.0))
+  ;; база, передний свес, задний свес, ширина, внешний радиус разворота (м)
+  ;; Car -- пример из статьи (VW Golf / BMW 3). Truck и Bus -- МОИ прикидки,
+  ;; не паспортные данные: для проектной проверки вводите свои значения.
+  (setq pr (cond ((= kw "Car")   '(2.7 0.9 1.1 1.85 5.6))
+                 ((= kw "Bus")   '(6.0 2.7 3.3 2.55 12.1))
+                 (t              '(4.5 1.5 2.5 2.5 9.8))))
+  (setq wb    (sp:ask "База (между осями), м"        (nth 0 pr))
+        ovf   (sp:ask "Передний свес, м"             (nth 1 pr))
+        ovr   (sp:ask "Задний свес, м"               (nth 2 pr))
+        wd    (sp:ask "Ширина кузова, м"             (nth 3 pr))
+        rout  (sp:ask "Внешний радиус разворота (по кузову), м" (nth 4 pr))
+        ds    (sp:ask "Шаг моделирования, м"         0.25)
+        ivl   (sp:ask "Интервал контуров кузова, м"  3.0))
+
+  ;; радиус задней оси при предельном руле: R_out^2 = (Rз + w/2)^2 + (wb+fo)^2
+  (if (<= rout (+ wb ovf))
+    (progn (princ "\nВнешний радиус не больше расстояния от задней оси до бампера -- так не бывает.")
+           (exit)))
+  (setq rrear (- (sqrt (- (* rout rout) (* (+ wb ovf) (+ wb ovf)))) (/ wd 2.0)))
+  (if (<= rrear 0.0)
+    (progn (princ "\nВнешний радиус слишком мал для этой ширины и базы.") (exit)))
+  (setq maxst (* (atan wb rrear) (/ 180.0 pi)))     ; угол руления, град
 
   ;; в единицы чертежа
   (setq wb (* wb sc) ovf (* ovf sc) ovr (* ovr sc) wd (* wd sc)
@@ -117,6 +136,7 @@
   (sp:layer "SWEPT-BODY" 8)
   (sp:layer "SWEPT-ENV"  1)
   (sp:layer "SWEPT-AXLE" 5)
+  (sp:layer "SWEPT-WHEEL" 3)
 
   (command "_.undo" "_begin")
 
@@ -165,7 +185,12 @@
           rr (sp:pt r h (- ovr)     (- (/ wd 2.0))))
     (setq trfl (cons fl trfl) trfr (cons fr trfr)
           trrl (cons rl trrl) trrr (cons rr trrr)
-          trf  (cons f trf)   trr  (cons r trr))
+          trf  (cons f trf)   trr  (cons r trr)
+          ;; концы осей = колёса (ширина колеи принята равной ширине кузова)
+          twl  (cons (sp:pt r h 0.0 (/ wd 2.0)) twl)
+          twr  (cons (sp:pt r h 0.0 (- (/ wd 2.0))) twr)
+          tfl2 (cons (sp:pt r h wb (/ wd 2.0)) tfl2)
+          tfr2 (cons (sp:pt r h wb (- (/ wd 2.0))) tfr2))
 
     ;; контур кузова через интервал и в последней точке
     (if (or (>= d nextd) (= d total))
@@ -180,6 +205,10 @@
   (sp:pline (reverse trfr) nil "SWEPT-ENV")
   (sp:pline (reverse trrl) nil "SWEPT-ENV")
   (sp:pline (reverse trrr) nil "SWEPT-ENV")
+  (sp:pline (reverse twl)  nil "SWEPT-WHEEL")
+  (sp:pline (reverse twr)  nil "SWEPT-WHEEL")
+  (sp:pline (reverse tfl2) nil "SWEPT-WHEEL")
+  (sp:pline (reverse tfr2) nil "SWEPT-WHEEL")
   (sp:pline (reverse trr)  nil "SWEPT-AXLE")
   (sp:pline (reverse trf)  nil "SWEPT-AXLE")
 
