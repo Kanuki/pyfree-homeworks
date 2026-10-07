@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Прыгающие шарики</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #111;
+    font-family: sans-serif;
+  }
+  #controls {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 10;
+    display: flex;
+    gap: 8px;
+  }
+  button {
+    padding: 10px 18px;
+    font-size: 16px;
+    border: none;
+    border-radius: 6px;
+    background: #2d6cdf;
+    color: #fff;
+    cursor: pointer;
+  }
+  button:active {
+    background: #1e4fa8;
+  }
+  canvas {
+    display: block;
+  }
+</style>
+</head>
+<body>
+  <div id="controls">
+    <button id="toggleBtn">Стоп</button>
+    <button id="addBtn">Добавить</button>
+  </div>
+  <canvas id="scene"></canvas>
+
+  <script>
+    const canvas = document.getElementById('scene');
+    const ctx = canvas.getContext('2d');
+
+    const RADIUS = 20;
+    const MIN_RADIUS = 6;
+    const MAX_RADIUS = 80;
+    const SPEED = 4;
+    const WHITE = '#ffffff';
+    const RED = '#e03131';
+    const SHRINK = 10;
+    const MIN_PLAYFIELD = 4 * MAX_RADIUS;
+
+    function clamp(value, min, max) {
+      return Math.min(Math.max(value, min), max);
+    }
+
+    let bounds = { left: 0, top: 0, right: 0, bottom: 0 };
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      bounds = { left: 0, top: 0, right: canvas.width, bottom: canvas.height };
+    }
+    window.addEventListener('resize', () => {
+      resize();
+      draw();
+    });
+    resize();
+
+    // hue is random but saturation/lightness are fixed away from white,
+    // so this can never produce white
+    function randomColor() {
+      const hue = Math.floor(Math.random() * 360);
+      return `hsl(${hue}, 80%, 55%)`;
+    }
+
+    // a ball counts as "blue" when its hue falls in the blue band of the
+    // wheel used by randomColor(); red/white balls never match
+    function isBlue(color) {
+      const match = /^hsl\((\d+)/.exec(color);
+      if (!match) return false;
+      const hue = Number(match[1]);
+      return hue >= 200 && hue <= 260;
+    }
+
+    function makeBall(opts = {}) {
+      const radius = opts.radius !== undefined ? opts.radius : RADIUS;
+      let vx;
+      let vy;
+      if (opts.vx !== undefined && opts.vy !== undefined) {
+        vx = opts.vx;
+        vy = opts.vy;
+      } else {
+        const angle = opts.angle !== undefined ? opts.angle : Math.random() * Math.PI * 2;
+        vx = Math.cos(angle) * SPEED;
+        vy = Math.sin(angle) * SPEED;
+      }
+      return {
+        x: opts.x !== undefined ? opts.x : bounds.left + radius + Math.random() * (bounds.right - bounds.left - 2 * radius),
+        y: opts.y !== undefined ? opts.y : bounds.top + radius + Math.random() * (bounds.bottom - bounds.top - 2 * radius),
+        vx,
+        vy,
+        color: opts.color || randomColor(),
+        radius,
+      };
+    }
+
+    const balls = [makeBall({ x: canvas.width / 2, y: canvas.height / 2, color: RED })];
+    let running = false;
+    let animationId = null;
+
+    function shrinkWall(side) {
+      if (side === 'left' && bounds.right - (bounds.left + SHRINK) >= MIN_PLAYFIELD) {
+        bounds.left += SHRINK;
+      } else if (side === 'right' && (bounds.right - SHRINK) - bounds.left >= MIN_PLAYFIELD) {
+        bounds.right -= SHRINK;
+      } else if (side === 'top' && bounds.bottom - (bounds.top + SHRINK) >= MIN_PLAYFIELD) {
+        bounds.top += SHRINK;
+      } else if (side === 'bottom' && (bounds.bottom - SHRINK) - bounds.top >= MIN_PLAYFIELD) {
+        bounds.bottom -= SHRINK;
+      }
+    }
+
+    // Collision outcomes:
+    //  - different color: a chaotic hit, 3 white balls burst outward
+    //  - same color + same size: they fuse into one ball twice as big
+    //  - same color + different size: both balls shrink by half
+    function resolveCollisions() {
+      const spawned = [];
+      const removed = new Set();
+
+      for (let i = 0; i < balls.length; i++) {
+        if (removed.has(i)) continue;
+        for (let j = i + 1; j < balls.length; j++) {
+          if (removed.has(j)) continue;
+          const a = balls[i];
+          const b = balls[j];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const minDist = a.radius + b.radius;
+
+          if (dist === 0 || dist >= minDist) continue;
+
+          const nx = dx / dist;
+          const ny = dy / dist;
+
+          const overlap = minDist - dist;
+          a.x -= (nx * overlap) / 2;
+          a.y -= (ny * overlap) / 2;
+          b.x += (nx * overlap) / 2;
+          b.y += (ny * overlap) / 2;
+
+          const relVel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+          a.vx -= relVel * nx;
+          a.vy -= relVel * ny;
+          b.vx += relVel * nx;
+          b.vy += relVel * ny;
+
+          const midX = (a.x + b.x) / 2;
+          const midY = (a.y + b.y) / 2;
+          const sameColor = a.color === b.color;
+          const sameSize = Math.abs(a.radius - b.radius) < 0.01;
+
+          if (!sameColor) {
+            for (let k = 0; k < 3; k++) {
+              spawned.push(makeBall({
+                x: clamp(midX, bounds.left + RADIUS, bounds.right - RADIUS),
+                y: clamp(midY, bounds.top + RADIUS, bounds.bottom - RADIUS),
+                color: WHITE,
+              }));
+            }
+          } else if (sameSize) {
+            removed.add(i);
+            removed.add(j);
+            spawned.push(makeBall({
+              x: midX,
+              y: midY,
+              vx: a.vx,
+              vy: a.vy,
+              color: a.color,
+              radius: Math.min(a.radius * 2, MAX_RADIUS),
+            }));
+          } else {
+            a.radius = Math.max(a.radius / 2, MIN_RADIUS);
+            b.radius = Math.max(b.radius / 2, MIN_RADIUS);
+          }
+        }
+      }
+
+      if (removed.size || spawned.length) {
+        const survivors = balls.filter((_, idx) => !removed.has(idx));
+        balls.length = 0;
+        balls.push(...survivors, ...spawned);
+      }
+    }
+
+    function update() {
+      for (const ball of balls) {
+        ball.x += ball.vx;
+        ball.y += ball.vy;
+
+        if (ball.x - ball.radius < bounds.left && ball.vx < 0) {
+          ball.x = bounds.left + ball.radius;
+          ball.vx *= -1;
+          if (isBlue(ball.color)) shrinkWall('left');
+        } else if (ball.x + ball.radius > bounds.right && ball.vx > 0) {
+          ball.x = bounds.right - ball.radius;
+          ball.vx *= -1;
+          if (isBlue(ball.color)) shrinkWall('right');
+        }
+
+        if (ball.y - ball.radius < bounds.top && ball.vy < 0) {
+          ball.y = bounds.top + ball.radius;
+          ball.vy *= -1;
+          if (isBlue(ball.color)) shrinkWall('top');
+        } else if (ball.y + ball.radius > bounds.bottom && ball.vy > 0) {
+          ball.y = bounds.bottom - ball.radius;
+          ball.vy *= -1;
+          if (isBlue(ball.color)) shrinkWall('bottom');
+        }
+      }
+
+      resolveCollisions();
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.strokeStyle = '#555';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top);
+
+      for (const ball of balls) {
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+        ctx.fillStyle = ball.color;
+        ctx.fill();
+      }
+    }
+
+    function step() {
+      update();
+      draw();
+
+      if (running) {
+        animationId = requestAnimationFrame(step);
+      }
+    }
+
+    function start() {
+      if (!running) {
+        running = true;
+        toggleBtn.textContent = 'Стоп';
+        animationId = requestAnimationFrame(step);
+      }
+    }
+
+    function stop() {
+      running = false;
+      toggleBtn.textContent = 'Пуск';
+      if (animationId) {
+        cancelAnimationFrame(animationId);
+      }
+    }
+
+    const toggleBtn = document.getElementById('toggleBtn');
+    const addBtn = document.getElementById('addBtn');
+    toggleBtn.textContent = running ? 'Стоп' : 'Пуск';
+
+    toggleBtn.addEventListener('click', () => {
+      if (running) {
+        stop();
+      } else {
+        start();
+      }
+    });
+
+    addBtn.addEventListener('click', () => {
+      balls.push(makeBall());
+      if (!running) {
+        draw();
+      }
+    });
+
+    draw();
+  </script>
+</body>
+</html>
