@@ -21,8 +21,16 @@
 ;;;   Середина задней оси движется "за" передней на расстоянии базы L
 ;;;   (нет бокового проскальзывания задних колёс).
 ;;;
+;;; Автофура (тип Semi): седельный тягач + полуприцеп. Шкворень лежит на
+;;;   оси тягача на расстоянии fw впереди его задней оси; ось (тележка)
+;;;   полуприцепа тянется за шкворнем на расстоянии ltk -- та же схема
+;;;   "ведомая точка догоняет ведущую", что и для задней оси тягача.
+;;;   Для сочленённого ТС четырёх углов мало (внутренний край может задавать
+;;;   точка на боку полуприцепа), поэтому дополнительно трассируются точки
+;;;   вдоль бортов полуприцепа (слой SWEPT-SIDE).
+;;;
 ;;; Ограничения (сознательные):
-;;;   - только одиночное ТС без прицепа (сочленённые не поддерживаются);
+;;;   - один прицеп (седельный); дышло, роспуск, B-train не поддерживаются;
 ;;;   - движение только вперёд, по направлению построения кривой;
 ;;;   - углы траектории (ломаная с острыми вершинами) дадут скачок угла руления --
 ;;;     рисуйте траекторию плавной (дуги, сплайн, скруглённая полилиния);
@@ -35,6 +43,12 @@
 
 (defun sp:ask (msg def / x)
   (initget 6)                           ; только > 0
+  (setq x (getreal (strcat "\n" msg " <" (rtos def 2 2) ">: ")))
+  (if x x def)
+)
+
+(defun sp:ask0 (msg def / x)            ; допускает 0
+  (initget 4)                           ; только >= 0
   (setq x (getreal (strcat "\n" msg " <" (rtos def 2 2) ">: ")))
   (if x x def)
 )
@@ -86,19 +100,23 @@
 (defun c:SWEPT (/ sc kw pr wb ovf ovr wd rout rrear maxst ds ivl sel en total
                   n i dist p0 tg fp f r h v len vel delta maxd nextd
                   fl fr rl rr trfl trfr trrl trrr trf trr nbody rmin
-                  twl twr tfl2 tfr2)
+                  twl twr tfl2 tfr2
+                  semi fw ltk tfo tro tw amax tp ht kp art maxa
+                  ufl ufr url urr utfl utfr utrl utrr uwl uwr utp
+                  stns usl usr cl cr tr1)
 
   ;; --- ввод параметров
   (setq sc (sp:ask "Единиц чертежа в 1 м (м=1, мм=1000)" 1.0))
 
-  (initget "Car Truck Bus")
-  (setq kw (getkword "\nТип ТС [Car/Truck/Bus] <Truck>: "))
+  (initget "Car Truck Bus Semi")
+  (setq kw (getkword "\nТип ТС [Car/Truck/Bus/Semi(автофура)] <Truck>: "))
   (if (null kw) (setq kw "Truck"))
   ;; база, передний свес, задний свес, ширина, внешний радиус разворота (м)
-  ;; Car -- пример из статьи (VW Golf / BMW 3). Truck и Bus -- МОИ прикидки,
-  ;; не паспортные данные: для проектной проверки вводите свои значения.
+  ;; Car -- пример из статьи (VW Golf / BMW 3). Truck, Bus и тягач Semi --
+  ;; МОИ прикидки, не паспортные данные: вводите свои значения.
   (setq pr (cond ((= kw "Car")   '(2.7 0.9 1.1 1.85 5.6))
                  ((= kw "Bus")   '(6.0 2.7 3.3 2.55 12.1))
+                 ((= kw "Semi")  '(3.8 1.4 0.8 2.55 7.6))
                  (t              '(4.5 1.5 2.5 2.5 9.8))))
   (setq wb    (sp:ask "База (между осями), м"        (nth 0 pr))
         ovf   (sp:ask "Передний свес, м"             (nth 1 pr))
@@ -107,6 +125,17 @@
         rout  (sp:ask "Внешний радиус разворота (по кузову), м" (nth 4 pr))
         ds    (sp:ask "Шаг моделирования, м"         0.25)
         ivl   (sp:ask "Интервал контуров кузова, м"  3.0))
+
+  (setq semi (= kw "Semi"))
+  (if semi
+    ;; полуприцеп: 7.7 + 4.3 = 12.0 м от шкворня до задней кромки (лимит ЕС),
+    ;; 1.6 м вперёд от шкворня -- вместе 13.6 м; всё равно проверьте по паспорту
+    (setq fw   (sp:ask0 "Шкворень впереди задней оси тягача, м" 0.0)
+          ltk  (sp:ask "Шкворень -- ось (тележка) полуприцепа, м" 7.7)
+          tfo  (sp:ask "Полуприцеп: свес вперёд от шкворня, м"   1.6)
+          tro  (sp:ask "Полуприцеп: свес назад за осью, м"        4.3)
+          tw   (sp:ask "Ширина полуприцепа, м"                    2.55)
+          amax (sp:ask "Макс. угол в седельном устройстве, град"  90.0)))
 
   ;; радиус задней оси при предельном руле: R_out^2 = (Rз + w/2)^2 + (wb+fo)^2
   (if (<= rout (+ wb ovf))
@@ -120,6 +149,8 @@
   ;; в единицы чертежа
   (setq wb (* wb sc) ovf (* ovf sc) ovr (* ovr sc) wd (* wd sc)
         ds (* ds sc) ivl (* ivl sc))
+  (if semi
+    (setq fw (* fw sc) ltk (* ltk sc) tfo (* tfo sc) tro (* tro sc) tw (* tw sc)))
 
   ;; --- выбор траектории
   (setq en nil)
@@ -137,6 +168,7 @@
   (sp:layer "SWEPT-ENV"  1)
   (sp:layer "SWEPT-AXLE" 5)
   (sp:layer "SWEPT-WHEEL" 3)
+  (sp:layer "SWEPT-SIDE" 9)
 
   (command "_.undo" "_begin")
 
@@ -149,7 +181,15 @@
         maxd 0.0
         nextd 0.0
         nbody 0
+        maxa 0.0
         n  (fix (/ total ds)))
+  (if semi
+    (setq kp   (sp:pt r h fw 0.0)
+          tp   (sp:pt kp h (- ltk) 0.0)  ; полуприцеп стоит вытянутым
+          ht   h
+          stns (list ltk (* 0.5 ltk) (* -0.5 tro))
+          usl  (mapcar '(lambda (x) nil) stns)
+          usr  (mapcar '(lambda (x) nil) stns)))
 
   ;; список расстояний: 0, ds, 2ds, ... и точный конец
   (setq i 0)
@@ -192,10 +232,36 @@
           tfl2 (cons (sp:pt r h wb (/ wd 2.0)) tfl2)
           tfr2 (cons (sp:pt r h wb (- (/ wd 2.0))) tfr2))
 
+    ;; полуприцеп: ось тянется за шкворнем, курс = направление ось -> шкворень
+    (if semi
+      (progn
+        (setq kp (sp:pt r h fw 0.0))
+        (if (> d 0.0)
+          (setq v  (list (- (car kp) (car tp)) (- (cadr kp) (cadr tp)))
+                ht (atan (cadr v) (car v))
+                tp (sp:pt kp ht (- ltk) 0.0)))
+        (setq art (abs (sp:angdiff h ht)))
+        (if (> art maxa) (setq maxa art))
+        (setq ufl (sp:pt tp ht (+ ltk tfo) (/ tw 2.0))
+              ufr (sp:pt tp ht (+ ltk tfo) (- (/ tw 2.0)))
+              url (sp:pt tp ht (- tro)     (/ tw 2.0))
+              urr (sp:pt tp ht (- tro)     (- (/ tw 2.0))))
+        (setq utfl (cons ufl utfl) utfr (cons ufr utfr)
+              utrl (cons url utrl) utrr (cons urr utrr)
+              utp  (cons tp utp)
+              uwl  (cons (sp:pt tp ht 0.0 (/ tw 2.0)) uwl)
+              uwr  (cons (sp:pt tp ht 0.0 (- (/ tw 2.0))) uwr))
+        ;; точки вдоль бортов (внутренний край может задавать не угол и не колесо)
+        (setq cl  (mapcar '(lambda (x) (sp:pt tp ht x (/ tw 2.0))) stns)
+              cr  (mapcar '(lambda (x) (sp:pt tp ht x (- (/ tw 2.0)))) stns)
+              usl (mapcar '(lambda (a q) (cons q a)) usl cl)
+              usr (mapcar '(lambda (a q) (cons q a)) usr cr))))
+
     ;; контур кузова через интервал и в последней точке
     (if (or (>= d nextd) (= d total))
       (progn
         (sp:pline (list fl fr rr rl) T "SWEPT-BODY")
+        (if semi (sp:pline (list ufl ufr urr url) T "SWEPT-BODY"))
         (setq nbody (1+ nbody))
         (while (<= nextd d) (setq nextd (+ nextd ivl)))))
   )
@@ -209,6 +275,16 @@
   (sp:pline (reverse twr)  nil "SWEPT-WHEEL")
   (sp:pline (reverse tfl2) nil "SWEPT-WHEEL")
   (sp:pline (reverse tfr2) nil "SWEPT-WHEEL")
+  (if semi
+    (progn
+      (sp:pline (reverse utfl) nil "SWEPT-ENV")
+      (sp:pline (reverse utfr) nil "SWEPT-ENV")
+      (sp:pline (reverse utrl) nil "SWEPT-ENV")
+      (sp:pline (reverse utrr) nil "SWEPT-ENV")
+      (sp:pline (reverse uwl)  nil "SWEPT-WHEEL")
+      (sp:pline (reverse uwr)  nil "SWEPT-WHEEL")
+      (sp:pline (reverse utp)  nil "SWEPT-AXLE")
+      (foreach tr1 (append usl usr) (sp:pline (reverse tr1) nil "SWEPT-SIDE"))))
   (sp:pline (reverse trr)  nil "SWEPT-AXLE")
   (sp:pline (reverse trf)  nil "SWEPT-AXLE")
 
@@ -226,6 +302,13 @@
       (setq rmin (/ (/ wb (sin (min maxd (/ pi 2.0)))) sc))
       (princ (strcat "\nМин. радиус по оси передних колёс на траектории: "
                      (rtos rmin 2 2) " м"))))
+  (if semi
+    (progn
+      (princ (strcat "\nМакс. угол в седельном устройстве: "
+                     (rtos (* maxa (/ 180.0 pi)) 2 1) " град (предел "
+                     (rtos amax 2 1) ")"))
+      (if (> (* maxa (/ 180.0 pi)) amax)
+        (princ "\n*** ВНИМАНИЕ: угол складывания превышает предел -- тягач упрётся в полуприцеп. ***"))))
   (if (> (* maxd (/ 180.0 pi)) maxst)
     (princ "\n*** ВНИМАНИЕ: требуемый угол руления превышает предел -- ТС так не проедет, смягчите траекторию. ***")
     (princ "\nУгол руления в пределах нормы."))
